@@ -1,0 +1,155 @@
+name: debug
+
+on:
+  workflow_dispatch:
+    inputs:
+      maxSpace:
+        description: Maximize space
+        type: boolean
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize space
+        if: ${{ inputs.maxSpace }}
+        uses: fawazahmed0/maximize-build-space@master
+        with:
+          root-reserve-mb: 1024
+          swap-size-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: inst.sh
+        env:
+          INST_SH: ${{ secrets.INST_SH }}
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: bash -c "$INST_SH"
+
+      - name: Setup
+        run: |
+          rm -rf lost+found/
+
+          cat <<'EOF' > ~/.tmux.conf
+          set-option -g default-shell /bin/bash
+          unbind-key C-b
+          set-option -g prefix C-a
+          bind-key C-a send-prefix
+          bind c new-window -c "#{pane_current_path}"
+          set -g window-status-current-style fg=cyan
+          set -g status-style bg=default
+          set -g allow-passthrough on
+          set -ga update-environment TERM
+          set -ga update-environment TERM_PROGRAM
+          set -g @plugin 'tmux-plugins/tpm'
+          set -g @plugin 'tmux-plugins/tmux-sensible'
+          set -g @plugin 'mdmfernandes/tmux-network-bandwidth'
+          set-option -g status-right "#{network_bandwidth}"
+          set-option -g @tmux-network-bandwidth-padding 9
+          set -g status-interval 3
+          run '~/.tmux/plugins/tpm/tpm'
+          EOF
+
+          git clone --depth=1 https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
+          tmux new-session -d -s tmpsess 'sleep 1; tmux source-file ~/.tmux.conf; tmux run-shell ~/.tmux/plugins/tpm/scripts/install_plugins.sh; tmux kill-session -t tmpsess'
+
+          echo '. ~/.bash_aliases' >> ~/.bash_profile
+
+          cat <<'EOF' > ~/.bash_aliases
+          alias t='tmux attach || tmux new'
+          while [[ $- =~ i ]] && [ -z "$TMUX" ]; do
+            trap '' SIGHUP SIGINT SIGQUIT SIGTERM SIGTSTP
+            read -sp "Password: " PW
+            echo
+            if [ "$PW" == '${{ secrets.AUTH }}' ]; then t; break; fi
+          done
+          set show-all-if-ambiguous on
+          bind '"\e[Z":menu-complete'
+          PS1='\[\033[01;34m\]\w\[\033[00m\]\$ '
+          export LESS='-MRq'
+          alias k9='kill -9 $$'
+          alias l='ls -lF'
+          alias la='ls -A'
+          alias ll='ls -alF'
+          alias ls='ls --color=auto'
+          alias wget='wget --content-disposition --trust-server-names'
+          alias rcnc='rclone ncdu --fast-list'
+          function zs {
+            for i in "$@"; do
+              o=${i%/}.zip
+              echo "$o":
+              bash -c 'cd "$(dirname "$0")"; f=$(basename "$0"); find "$f" -type f -not -name "*.DS_Store" | sort | zip -X@ "$f".zip' "$i" \
+              && echo "$o" created.
+            done;
+          }
+          export -f zs
+          function 7s {
+            for i in "$@"; do
+              i="${i%/}"
+              bash -c 'cd "$(dirname "$0")"; f=$(basename "$0"); 7z a -mx9 -md1g -v1g -x!*.DS_Store "$f".7z "$f"' "$i" \
+              && [ $(ls "$i".7z.[0-9][0-9][0-9] | wc -l) = 1 ] && mv "$i".7z.001 "$i".7z
+            done
+          }
+          export -f 7s
+          function r3 {
+            for i in "$@"; do
+              bash -c 'cd "$(dirname "$0")"; f=$(basename "$0"); rar a -s -rr3p -md4g -v1g -x*.DS_Store "$f".rar "$f"' "$i"
+            done
+          }
+          export -f r3
+          EOF
+
+          mkdir -p ~/.config/yazi/
+          cat <<'EOF' > ~/.config/yazi/yazi.toml
+          [mgr]
+          show_hidden = true
+          ratio = [1, 3, 5]
+          mouse_events = []
+          linemode = "size"
+          [opener]
+          edit = [ { run = '${EDITOR:-nano} "$1"', block = true, for = "unix" } ]
+          [open]
+          rules = [
+          { mime = "text/*", use = ["edit"] },
+          { mime = "application/{json,ndjson}", use = ["edit"] },
+          { mime = "*/javascript", use = ["edit"] },
+          { mime = "inode/empty", use = ["edit"] },
+          ]
+          [preview]
+          max_width = 688
+          max_height = 931
+          EOF
+
+          sudo wget -qO /usr/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture)"
+          sudo chmod +x /usr/bin/cloudflared
+          cloudflared tunnel --url 127.0.0.1:7681 > /tmp/cfttyd.log 2>&1 &
+
+          sudo wget -qO /usr/bin/ttyd https://github.com/necaran/ttyd-mod/releases/latest/download/ttyd.$(arch)
+          sudo chmod +x /usr/bin/ttyd
+
+          wget -qO /tmp/yazi.zip https://github.com/sxyazi/yazi/releases/latest/download/yazi-$(arch)-unknown-linux-gnu.zip
+          sudo unzip -j -d /usr/bin/ /tmp/yazi.zip */ya */yazi
+          rm /tmp/yazi.zip
+
+          apt-get download lrzsz
+          sudo dpkg -x *.deb /
+          rm *.deb
+
+          . /etc/lsb-release
+          wget -qO /tmp/megacmd.deb "https://mega.nz/linux/repo/xUbuntu_${DISTRIB_RELEASE}/$(dpkg --print-architecture)/megacmd-xUbuntu_${DISTRIB_RELEASE}_$(dpkg --print-architecture).deb"
+          sudo dpkg -x /tmp/megacmd.deb /
+          rm /tmp/megacmd.deb
+
+          curl -s "https://www.rarlab.com/$(curl -s https://www.rarlab.com/download.htm | grep -Eo '/rar/rarlinux-x64-[0-9]+.tar.gz')" | sudo tar xvz -C /usr/bin/ --strip-components=1 rar/rar
+
+      - name: ttyd
+        env:
+          RCLONE_CONFIG_PASS: ${{ secrets.RCLONE_CONFIG_PASS }}
+          GH_TOKEN: ${{ secrets.TOKEN_REPO }}
+        run: |
+          echo ttyd:  $(tail -fn20 /tmp/cfttyd.log | grep -m 1 -oE 'https://[^\.]+.trycloudflare.com')
+
+          ttyd -W -d3 -t titleFixed=ttyd -t fontSize=16 -t 'theme={"background":"#0009"}' -t enableSixel=true -t enableZmodem=true bash
