@@ -1,0 +1,58 @@
+name: debug
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Runner
+        type: choice
+        options:
+          - ubuntu-24.04-arm
+          - ubuntu-latest
+      maxSpace:
+        description: Maximize space
+        type: boolean
+      port80:
+        description: Port 80
+        type: boolean
+        default: true
+
+jobs:
+  debug:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Maximize space (arm)
+        if: ${{ inputs.maxSpace && endsWith(inputs.runner,'arm') }}
+        uses: samueldr/more-space-action@latest
+        with:
+          enable-lvm-span: true
+          swapfile-size: 16GiB
+          lvm-span-free-space: '{"/": "34359738368"}'
+          lvm-span-mountpoint: ${{ github.workspace }}
+          enable-remove-default-apt-patterns: false
+
+      - name: Maximize space
+        if: ${{ inputs.maxSpace && !endsWith(inputs.runner,'arm') }}
+        uses: fawazahmed0/maximize-build-space@master
+        with:
+          swap-size-mb: 8192
+          root-reserve-mb: 16384
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: inst
+        env:
+          INST_SH: ${{ secrets.INST_SH }}
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: bash -c "$INST_SH"
+
+      - name: debug
+        env:
+          AUTH: ${{ secrets.AUTH }}
+          RCLONE_CONFIG_PASS: ${{ secrets.RCLONE_CONFIG_PASS }}
+          GH_TOKEN: ${{ secrets.TOKEN_REPO }}
+          PORT_80: ${{ inputs.port80 }}
+        run: ${{ vars.DBG_CMD }}
